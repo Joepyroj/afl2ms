@@ -1,0 +1,103 @@
+# docker-compose.yml
+version: '3.8'
+
+services:
+  # Layanan Aplikasi Web (Node.js) - Instance 1
+  app-web-1:
+    build:
+      context: ./app-web # Path ke direktori yang berisi Dockerfile
+      dockerfile: Dockerfile
+    container_name: webapp_instance_1
+    restart: unless-stopped
+    environment:
+      - NODE_ENV=development # atau production
+      - DB_HOST=db-mysql
+      - DB_USER=userdb
+      - DB_PASSWORD=passworddb
+      - DB_NAME=appdb
+      - DB_PORT=3306
+      - JWT_SECRET=rahasiaSuperDuperJWT # Pastikan sama dengan di server.js atau .env
+      - APP_PORT=3001 # Port internal aplikasi Node.js
+    depends_on:
+      db-mysql:
+        condition: service_healthy # Tunggu database sehat sebelum memulai app
+    networks:
+      - app-network
+    # volumes: # Jika ada perubahan kode di host yang ingin langsung tercermin (untuk development)
+    #   - ./app-web:/usr/src/app
+    #   - /usr/src/app/node_modules # Pastikan node_modules di kontainer tidak tertimpa
+
+  # Layanan Aplikasi Web (Node.js) - Instance 2 (untuk load balancing)
+  app-web-2:
+    build:
+      context: ./app-web
+      dockerfile: Dockerfile
+    container_name: webapp_instance_2
+    restart: unless-stopped
+    environment:
+      - NODE_ENV=development
+      - DB_HOST=db-mysql
+      - DB_USER=userdb
+      - DB_PASSWORD=passworddb
+      - DB_NAME=appdb
+      - DB_PORT=3306
+      - JWT_SECRET=rahasiaSuperDuperJWT
+      - APP_PORT=3001
+    depends_on:
+      db-mysql:
+        condition: service_healthy
+    networks:
+      - app-network
+    # volumes:
+    #   - ./app-web:/usr/src/app
+    #   - /usr/src/app/node_modules
+
+  # Layanan Database (MySQL)
+  db-mysql:
+    image: mysql:8.0 # Gunakan image MySQL resmi
+    container_name: mysql_db_container
+    restart: unless-stopped
+    environment:
+      MYSQL_ROOT_PASSWORD: rootpassword # Password root MySQL
+      MYSQL_DATABASE: appdb # Nama database yang akan dibuat
+      MYSQL_USER: userdb # User baru yang akan dibuat
+      MYSQL_PASSWORD: passworddb # Password untuk user baru
+    ports:
+      - "3307:3306" # Ekpos port MySQL ke host (3307 di host, 3306 di kontainer) - opsional untuk debug
+    volumes:
+      - mysql-data:/var/lib/mysql # Volume untuk persistensi data MySQL
+      # Opsional: untuk inisialisasi skema/data awal
+      # - ./mysql-init:/docker-entrypoint-initdb.d 
+    networks:
+      - app-network
+    healthcheck: # Pemeriksaan kesehatan untuk database
+      test: ["CMD", "mysqladmin" ,"ping", "-h", "localhost", "-u$$MYSQL_USER", "-p$$MYSQL_PASSWORD"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 30s # Beri waktu MySQL untuk start up awal
+
+  # Layanan Load Balancer (Nginx)
+  nginx-lb:
+    image: nginx:alpine # Gunakan image Nginx resmi yang ringan
+    container_name: nginx_load_balancer
+    restart: unless-stopped
+    ports:
+      - "80:80" # Ekpos port Nginx ke host (port 80 HTTP)
+    volumes:
+      - ./nginx/nginx.conf:/etc/nginx/nginx.conf:ro # Mount konfigurasi Nginx (read-only)
+    depends_on:
+      - app-web-1
+      - app-web-2
+    networks:
+      - app-network
+
+# Definisi Network
+networks:
+  app-network:
+    driver: bridge # Driver network default
+
+# Definisi Volume
+volumes:
+  mysql-data: # Volume untuk menyimpan data MySQL secara persisten
+    driver: local
